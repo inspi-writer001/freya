@@ -1,5 +1,5 @@
 # ⚡ Freya
-
+![freya-banner-comp](https://i.ibb.co/BVBv1y2y/freya-banner-comp.png)
 > **Lossless compression for the terminal age.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
