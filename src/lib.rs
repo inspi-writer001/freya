@@ -11,6 +11,10 @@ pub enum CompressMessage {
         bytes_processed: u64,
         total_bytes: u64,
     },
-    Finished,
+    Finished {
+        original_size: u64,
+        compressed_size: u64,
+        output_path: String,
+    },
     Error(String),
 }

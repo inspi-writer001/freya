@@ -8,7 +8,7 @@ pub fn start_compression(
     tx: mpsc::Sender<CompressMessage>,
 ) {
     std::thread::spawn(move || {
-        let run = || -> std::io::Result<()> {
+        let run = || -> std::io::Result<(u64, u64, String)> {
             let mut input_file = std::fs::File::open(&input_path)?;
             let total_bytes = input_file.metadata()?.len();
             let output_file = std::fs::File::create(&output_path)?;
@@ -30,13 +30,18 @@ pub fn start_compression(
                 });
             }
 
-            encoder.finish()?;
-            Ok(())
+            let output_file = encoder.finish()?;
+            let compressed_size = output_file.metadata()?.len();
+            Ok((total_bytes, compressed_size, output_path))
         };
 
         match run() {
-            Ok(_) => {
-                let _ = tx.send(CompressMessage::Finished);
+            Ok((original_size, compressed_size, path)) => {
+                let _ = tx.send(CompressMessage::Finished {
+                    original_size,
+                    compressed_size,
+                    output_path: path,
+                });
             }
             Err(e) => {
                 let _ = tx.send(CompressMessage::Error(e.to_string()));

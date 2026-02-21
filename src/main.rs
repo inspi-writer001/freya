@@ -3,5 +3,12 @@ use std::io;
 use freya::App;
 
 fn main() -> io::Result<()> {
-    ratatui::run(|terminal| App::default().run(terminal))
+    let mut app = App::default();
+    ratatui::run(|terminal| app.run(terminal))?;
+
+    if let Some(result) = app.last_compression_result {
+        println!("{}", result);
+    }
+
+    Ok(())
 }
