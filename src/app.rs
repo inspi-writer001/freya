@@ -47,15 +47,50 @@ impl App {
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
-        match event::read()? {
-            // it's important to check that the event is a key press event as
-            // crossterm also emits key release and repeat events on Windows.
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.handle_key_event(key_event)
-            }
-            _ => {}
-        };
+        // Use poll with a timeout so the loop can also check compression progress
+        if event::poll(std::time::Duration::from_millis(50))? {
+            match event::read()? {
+                // it's important to check that the event is a key press event as
+                // crossterm also emits key release and repeat events on Windows.
+                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                    self.handle_key_event(key_event)
+                }
+                _ => {}
+            };
+        }
+        self.check_compression_progress();
         Ok(())
+    }
+
+    fn check_compression_progress(&mut self) {
+        if let Some(ref receiver) = self.receiver {
+            while let Ok(msg) = receiver.try_recv() {
+                match msg {
+                    CompressMessage::Progress {
+                        bytes_processed,
+                        total_bytes,
+                    } => {
+                        if total_bytes > 0 {
+                            self.progress = bytes_processed as f64 / total_bytes as f64;
+                        }
+                    }
+                    CompressMessage::Finished => {
+                        self.is_compressing = false;
+                        self.progress = 1.0;
+                        self.status_message = " Compression complete!".to_string();
+                        self.receiver = None;
+                        return;
+                    }
+                    CompressMessage::Error(e) => {
+                        self.is_compressing = false;
+                        self.progress = 0.0;
+                        self.status_message = format!(" Error: {}", e);
+                        self.receiver = None;
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -84,7 +119,11 @@ impl App {
                         input_path.file_name().unwrap_or_default()
                     );
 
-                    // TODO write compression logic
+                    crate::start_compression(
+                        input_path.to_string_lossy().to_string(),
+                        output_path.to_string_lossy().to_string(),
+                        tx,
+                    );
                 } else {
                     // TODO handle error gracefully
                     self.status_message = format!(
