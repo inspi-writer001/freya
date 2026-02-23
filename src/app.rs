@@ -1,7 +1,15 @@
 use crate::{CompressMessage, CompressionLevel};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use ratatui::{DefaultTerminal, Frame};
-use std::{io, sync::mpsc};
+use ratatui::{
+    DefaultTerminal, Frame,
+    buffer::Buffer,
+    layout::{Constraint, Layout, Rect},
+    style::{Style, Stylize},
+    symbols::border,
+    text::{Line, Text},
+    widgets::{Block, Gauge, Paragraph, Widget},
+};
+use std::{io, path::PathBuf, sync::mpsc};
 
 #[derive(Debug)]
 pub struct App {
@@ -44,6 +52,35 @@ impl App {
 
     fn draw(&mut self, frame: &mut Frame) {
         frame.render_widget(self, frame.area());
+    }
+
+    // REUSABLE: Builds the default output path: same directory as the input, with ".zst" appended.
+    fn default_output_path(input_path: &PathBuf) -> PathBuf {
+        let mut output = input_path.clone();
+        let mut new_extension = output.extension().unwrap_or_default().to_os_string();
+        new_extension.push(".zst");
+        output.set_extension(new_extension);
+        output
+    }
+
+    // REUSABLE: Shared setup for both 'o' and 's' once the input and output paths are resolved.
+    fn start_compression_job(&mut self, input_path: PathBuf, output_path: PathBuf) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.receiver = Some(rx);
+        self.is_compressing = true;
+        self.progress = 0.0;
+        self.compression_finished_at = None;
+
+        self.status_message = format!(
+            " Compressing {:?}",
+            input_path.file_name().unwrap_or_default(),
+        );
+
+        crate::start_compression(
+            input_path.to_string_lossy().to_string(),
+            output_path.to_string_lossy().to_string(),
+            tx,
+        );
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
@@ -173,6 +210,29 @@ impl App {
                     );
                 }
             }
+            KeyCode::Char('s') => {
+                // Select a file to compress
+                if let Some(input_path) = rfd::FileDialog::new().pick_file() {
+                    // Pre-fill the save dialog with the suggested output filename
+                    let suggested_name = {
+                        let mut n = input_path.file_name().unwrap_or_default().to_os_string();
+                        n.push(".zst");
+                        n
+                    };
+
+                    // Select a location to save compressed file
+                    let output_path = rfd::FileDialog::new()
+                        .set_title("Save compressed file as…")
+                        .set_file_name(suggested_name.to_string_lossy())
+                        .save_file()
+                        .unwrap_or_else(|| Self::default_output_path(&input_path));
+
+                    self.start_compression_job(input_path, output_path);
+                } else {
+                    self.status_message = format!("Not Compressing ",);
+                }
+            }
+
             KeyCode::Char('o') => {
                 // 1. Open the native OS file dialogue
                 if let Some(input_path) = rfd::FileDialog::new().pick_file() {
@@ -218,5 +278,73 @@ impl App {
 
     fn exit(&mut self) {
         self.exit = true;
+    }
+}
+
+impl Widget for &mut App {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let mut constraints = vec![
+            Constraint::Length(5), // Height for the description block (borders + text + padding)
+            Constraint::Length(3), // Height for the instruction block
+        ];
+
+        let show_progress = self.is_compressing || self.progress > 0.0;
+        if show_progress {
+            constraints.push(Constraint::Length(3)); // Height for the progress block
+        }
+        constraints.push(Constraint::Min(0)); // The remaining empty space on the screen
+
+        let chunks = Layout::vertical(constraints).split(area);
+        let title = Line::from(" Freya - Lossless Compression for files ".bold());
+        let instructions = Line::from(vec![
+            " Open File ".into(),
+            "<o> |".blue().bold(),
+            " Decompress ".into(),
+            "<d> |".blue().bold(),
+            " Save To ".into(),
+            "<s> |".blue().bold(),
+            " Quit ".into(),
+            "<Q> ".blue().bold(),
+        ]);
+        let block1 = Block::bordered()
+            .title(title.centered())
+            .title_bottom(instructions.centered())
+            .border_style(Style::new().blue())
+            .border_set(border::DOUBLE);
+
+        let description_text = Text::from(vec![Line::from(vec![
+            " Freya helps compress your file types without losing the quality of the files.".into(),
+        ])]);
+
+        let instruction_text = Text::from(vec![Line::from(vec![
+            self.status_message.to_string().yellow(),
+        ])]);
+
+        Paragraph::new(description_text)
+            .left_aligned()
+            .block(block1)
+            .render(chunks[0], buf);
+
+        let block2 = Block::bordered()
+            .border_style(Style::new().blue())
+            .border_set(border::DOUBLE);
+        Paragraph::new(instruction_text)
+            .left_aligned()
+            .block(block2)
+            .render(chunks[1], buf);
+
+        if show_progress {
+            let percentage = (self.progress * 100.0).clamp(0.0, 100.0) as u16;
+            let gauge = Gauge::default()
+                .block(
+                    Block::bordered()
+                        .title(" Progress ")
+                        .border_style(Style::default().blue()),
+                )
+                .gauge_style(Style::default().fg(ratatui::style::Color::Yellow))
+                .ratio(self.progress.clamp(0.0, 1.0))
+                .label(format!("{}%", percentage));
+            gauge.render(chunks[2], buf);
+        }
     }
 }
