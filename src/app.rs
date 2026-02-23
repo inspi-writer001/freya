@@ -1,14 +1,6 @@
-use crate::CompressMessage;
+use crate::{CompressMessage, CompressionLevel};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use ratatui::{
-    DefaultTerminal, Frame,
-    buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
-    style::{Style, Stylize},
-    symbols::border,
-    text::{Line, Text},
-    widgets::{Block, Gauge, Paragraph, Widget},
-};
+use ratatui::{DefaultTerminal, Frame};
 use std::{io, sync::mpsc};
 
 #[derive(Debug)]
@@ -21,6 +13,7 @@ pub struct App {
     pub receiver: Option<mpsc::Receiver<CompressMessage>>,
     pub last_compression_result: Option<String>,
     pub compression_finished_at: Option<std::time::Instant>,
+    pub compression_level: CompressionLevel,
 }
 
 impl Default for App {
@@ -34,6 +27,7 @@ impl Default for App {
             receiver: None,
             last_compression_result: None,
             compression_finished_at: None,
+            compression_level: CompressionLevel::Normal,
         }
     }
 }
@@ -141,6 +135,18 @@ impl App {
 
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
+            // Up arrow → decrease toward Fast (slower = smaller file, so intuitive "up = better")
+            KeyCode::Up => {
+                if !self.is_compressing {
+                    self.compression_level = self.compression_level.decrease();
+                }
+            }
+            // Down arrow → increase toward Best
+            KeyCode::Down => {
+                if !self.is_compressing {
+                    self.compression_level = self.compression_level.increase();
+                }
+            }
             KeyCode::Char('d') => {
                 if let Some(input_path) = rfd::FileDialog::new()
                     .add_filter("Zstd compressed", &["zst"])
@@ -187,14 +193,16 @@ impl App {
 
                     // Let the user know we're starting
                     self.status_message = format!(
-                        " Compressing {:?}",
-                        input_path.file_name().unwrap_or_default()
+                        " Compressing {:?} [{}]",
+                        input_path.file_name().unwrap_or_default(),
+                        self.compression_level.label(),
                     );
 
                     crate::start_compression(
                         input_path.to_string_lossy().to_string(),
                         output_path.to_string_lossy().to_string(),
                         tx,
+                        self.compression_level,
                     );
                 } else {
                     // TODO handle error gracefully
@@ -210,71 +218,5 @@ impl App {
 
     fn exit(&mut self) {
         self.exit = true;
-    }
-}
-
-impl Widget for &mut App {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let mut constraints = vec![
-            Constraint::Length(5), // Height for the description block (borders + text + padding)
-            Constraint::Length(3), // Height for the instruction block
-        ];
-
-        let show_progress = self.is_compressing || self.progress > 0.0;
-        if show_progress {
-            constraints.push(Constraint::Length(3)); // Height for the progress block
-        }
-        constraints.push(Constraint::Min(0)); // The remaining empty space on the screen
-
-        let chunks = Layout::vertical(constraints).split(area);
-        let title = Line::from(" Freya - Lossless Compression for files ".bold());
-        let instructions = Line::from(vec![
-            " Open File ".into(),
-            "<o> |".blue().bold(),
-            " Decompress ".into(),
-            "<d> |".blue().bold(),
-            " Quit ".into(),
-            "<Q> ".blue().bold(),
-        ]);
-        let block1 = Block::bordered()
-            .title(title.centered())
-            .title_bottom(instructions.centered())
-            .border_style(Style::new().blue())
-            .border_set(border::DOUBLE);
-
-        let description_text = Text::from(vec![Line::from(vec![
-            " Freya helps compress your file types without losing the quality of the files.".into(),
-        ])]);
-
-        let instruction_text = Text::from(vec![Line::from(vec![
-            self.status_message.to_string().yellow(),
-        ])]);
-
-        Paragraph::new(description_text)
-            .left_aligned()
-            .block(block1)
-            .render(chunks[0], buf);
-
-        let block2 = Block::bordered()
-            .border_style(Style::new().blue())
-            .border_set(border::DOUBLE);
-        Paragraph::new(instruction_text)
-            .left_aligned()
-            .block(block2)
-            .render(chunks[1], buf);
-
-        if show_progress {
-            let percentage = (self.progress * 100.0).clamp(0.0, 100.0) as u16;
-            let gauge = Gauge::default()
-                .block(
-                    Block::bordered()
-                        .title(" Progress ")
-                        .border_style(Style::default().blue()),
-                )
-                .gauge_style(Style::default().fg(ratatui::style::Color::Yellow))
-                .ratio(self.progress.clamp(0.0, 1.0))
-                .label(format!("{}%", percentage));
-            gauge.render(chunks[2], buf);
-        }
     }
 }
