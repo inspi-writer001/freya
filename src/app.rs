@@ -1,4 +1,4 @@
-use crate::CompressMessage;
+use crate::{CompressMessage, CompressionLevel};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -21,6 +21,7 @@ pub struct App {
     pub receiver: Option<mpsc::Receiver<CompressMessage>>,
     pub last_compression_result: Option<String>,
     pub compression_finished_at: Option<std::time::Instant>,
+    pub compression_level: CompressionLevel,
 }
 
 impl Default for App {
@@ -34,6 +35,7 @@ impl Default for App {
             receiver: None,
             last_compression_result: None,
             compression_finished_at: None,
+            compression_level: CompressionLevel::Normal,
         }
     }
 }
@@ -170,6 +172,18 @@ impl App {
 
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
+            // Up arrow → decrease toward Fast (slower = smaller file, so intuitive "up = better")
+            KeyCode::Up => {
+                if !self.is_compressing {
+                    self.compression_level = self.compression_level.decrease();
+                }
+            }
+            // Down arrow → increase toward Best
+            KeyCode::Down => {
+                if !self.is_compressing {
+                    self.compression_level = self.compression_level.increase();
+                }
+            }
             KeyCode::Char('d') => {
                 if let Some(input_path) = rfd::FileDialog::new()
                     .add_filter("Zstd compressed", &["zst"])
@@ -231,7 +245,25 @@ impl App {
                     output_path.set_extension(new_extension);
 
                     // 3. Set up the communication channel for the background thread
-                    self.start_compression_job(input_path, output_path);
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.receiver = Some(rx);
+                    self.is_compressing = true;
+                    self.progress = 0.0;
+                    self.compression_finished_at = None;
+
+                    // Let the user know we're starting
+                    self.status_message = format!(
+                        " Compressing {:?} [{}]",
+                        input_path.file_name().unwrap_or_default(),
+                        self.compression_level.label(),
+                    );
+
+                    crate::start_compression(
+                        input_path.to_string_lossy().to_string(),
+                        output_path.to_string_lossy().to_string(),
+                        tx,
+                        self.compression_level,
+                    );
                 } else {
                     // TODO handle error gracefully
                     self.status_message = format!(

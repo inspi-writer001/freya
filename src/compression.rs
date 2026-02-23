@@ -1,4 +1,4 @@
-use crate::CompressMessage;
+use crate::{CompressMessage, CompressionLevel};
 use std::io::{BufReader, Read, Write};
 use std::sync::mpsc;
 use zstd::stream::Decoder;
@@ -7,6 +7,7 @@ pub fn start_compression(
     input_path: String,
     output_path: String,
     tx: mpsc::Sender<CompressMessage>,
+    level: CompressionLevel,
 ) {
     std::thread::spawn(move || {
         let run = || -> std::io::Result<(u64, u64, String)> {
@@ -14,7 +15,7 @@ pub fn start_compression(
             let total_bytes = input_file.metadata()?.len();
             let output_file = std::fs::File::create(&output_path)?;
 
-            let mut encoder = zstd::stream::Encoder::new(output_file, 3)?;
+            let mut encoder = zstd::stream::Encoder::new(output_file, level.zstd_level())?;
             let mut buffer = [0u8; 64 * 1024]; // 64KB buffer
             let mut bytes_processed: u64 = 0;
 
@@ -119,7 +120,8 @@ mod tests {
         let decompressed_path = dir.join("output.txt");
 
         // Repeat enough to actually exercise chunked reading (5KB+)
-        let original_data = b"Hello Freya! This is a round-trip compression accelerated test.\n".repeat(100);
+        let original_data =
+            b"Hello Freya! This is a round-trip compression accelerated test.\n".repeat(100);
         std::fs::write(&original_path, &original_data).unwrap();
 
         // Step 1: compress the file and drain the channel until we get Finished
@@ -128,6 +130,7 @@ mod tests {
             original_path.to_string_lossy().to_string(),
             compressed_path.to_string_lossy().to_string(),
             tx,
+            crate::CompressionLevel::Normal,
         );
 
         let mut finished = false;
@@ -160,11 +163,17 @@ mod tests {
                 panic!("Decompression failed: {}", e);
             }
         }
-        assert!(finished, "Never received Finished message from decompression");
+        assert!(
+            finished,
+            "Never received Finished message from decompression"
+        );
 
         // Step 3: byte-for-byte comparison -- if this fails, something is very wrong
         let result = std::fs::read(&decompressed_path).unwrap();
-        assert_eq!(original_data, result, "Decompressed data does not match original");
+        assert_eq!(
+            original_data, result,
+            "Decompressed data does not match original"
+        );
 
         // Don't leave temp files lying around
         std::fs::remove_dir_all(&dir).ok();
