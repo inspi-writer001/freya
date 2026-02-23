@@ -15,6 +15,7 @@ use std::{io, sync::mpsc};
 pub struct App {
     exit: bool,
     pub is_compressing: bool,
+    pub is_decompressing: bool,
     pub progress: f64, // A percentage from 0.0 to 1.0
     pub status_message: String,
     pub receiver: Option<mpsc::Receiver<CompressMessage>>,
@@ -27,8 +28,9 @@ impl Default for App {
         Self {
             exit: false,
             is_compressing: false,
+            is_decompressing: false,
             progress: 0.0,
-            status_message: " Start by pressing 'o' to open a file".to_string(),
+            status_message: " Press 'o' to compress or 'd' to decompress a file".to_string(),
             receiver: None,
             last_compression_result: None,
             compression_finished_at: None,
@@ -93,25 +95,35 @@ impl App {
                     } => {
                         self.is_compressing = false;
                         self.progress = 1.0;
-                        self.status_message = " Compression complete!".to_string();
                         self.receiver = None;
 
-                        let ratio = if original_size > 0 {
-                            (compressed_size as f64 / original_size as f64) * 100.0
+                        if self.is_decompressing {
+                            self.is_decompressing = false;
+                            self.status_message = " Decompression complete!".to_string();
+                            self.last_compression_result = Some(format!(
+                                "\nDecompression successful!\nSaved to: {}\nCompressed: {} bytes\nDecompressed: {} bytes\n",
+                                output_path, original_size, compressed_size
+                            ));
                         } else {
-                            0.0
-                        };
+                            let ratio = if original_size > 0 {
+                                (compressed_size as f64 / original_size as f64) * 100.0
+                            } else {
+                                0.0
+                            };
 
-                        self.last_compression_result = Some(format!(
-                            "\n✅ Compression successful!\n📂 Saved to: {}\n📊 Original: {} bytes \n📉 Compressed: {} bytes ({:.2}% of original)\n",
-                            output_path, original_size, compressed_size, ratio
-                        ));
+                            self.status_message = " Compression complete!".to_string();
+                            self.last_compression_result = Some(format!(
+                                "\nCompression successful!\nSaved to: {}\nOriginal: {} bytes\nCompressed: {} bytes ({:.2}% of original)\n",
+                                output_path, original_size, compressed_size, ratio
+                            ));
+                        }
 
                         self.compression_finished_at = Some(std::time::Instant::now());
                         return;
                     }
                     CompressMessage::Error(e) => {
                         self.is_compressing = false;
+                        self.is_decompressing = false;
                         self.progress = 0.0;
                         self.status_message = format!(" Error: {}", e);
                         self.receiver = None;
@@ -129,6 +141,32 @@ impl App {
 
         match key_event.code {
             KeyCode::Char('q') => self.exit(),
+            KeyCode::Char('d') => {
+                if let Some(input_path) = rfd::FileDialog::new()
+                    .add_filter("Zstd compressed", &["zst"])
+                    .pick_file()
+                {
+                    let output_path = input_path.with_extension("");
+
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.receiver = Some(rx);
+                    self.is_compressing = true;
+                    self.is_decompressing = true;
+                    self.progress = 0.0;
+                    self.compression_finished_at = None;
+
+                    self.status_message = format!(
+                        " Decompressing {:?}",
+                        input_path.file_name().unwrap_or_default()
+                    );
+
+                    crate::start_decompression(
+                        input_path.to_string_lossy().to_string(),
+                        output_path.to_string_lossy().to_string(),
+                        tx,
+                    );
+                }
+            }
             KeyCode::Char('o') => {
                 // 1. Open the native OS file dialogue
                 if let Some(input_path) = rfd::FileDialog::new().pick_file() {
@@ -193,6 +231,8 @@ impl Widget for &mut App {
         let instructions = Line::from(vec![
             " Open File ".into(),
             "<o> |".blue().bold(),
+            " Decompress ".into(),
+            "<d> |".blue().bold(),
             " Quit ".into(),
             "<Q> ".blue().bold(),
         ]);
