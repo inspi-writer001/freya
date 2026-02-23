@@ -9,7 +9,7 @@ use ratatui::{
     text::{Line, Text},
     widgets::{Block, Gauge, Paragraph, Widget},
 };
-use std::{io, sync::mpsc};
+use std::{io, path::PathBuf, sync::mpsc};
 
 #[derive(Debug)]
 pub struct App {
@@ -50,6 +50,35 @@ impl App {
 
     fn draw(&mut self, frame: &mut Frame) {
         frame.render_widget(self, frame.area());
+    }
+
+    // REUSABLE: Builds the default output path: same directory as the input, with ".zst" appended.
+    fn default_output_path(input_path: &PathBuf) -> PathBuf {
+        let mut output = input_path.clone();
+        let mut new_extension = output.extension().unwrap_or_default().to_os_string();
+        new_extension.push(".zst");
+        output.set_extension(new_extension);
+        output
+    }
+
+    // REUSABLE: Shared setup for both 'o' and 's' once the input and output paths are resolved.
+    fn start_compression_job(&mut self, input_path: PathBuf, output_path: PathBuf) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.receiver = Some(rx);
+        self.is_compressing = true;
+        self.progress = 0.0;
+        self.compression_finished_at = None;
+
+        self.status_message = format!(
+            " Compressing {:?}",
+            input_path.file_name().unwrap_or_default(),
+        );
+
+        crate::start_compression(
+            input_path.to_string_lossy().to_string(),
+            output_path.to_string_lossy().to_string(),
+            tx,
+        );
     }
 
     fn handle_events(&mut self) -> io::Result<()> {
@@ -167,6 +196,29 @@ impl App {
                     );
                 }
             }
+            KeyCode::Char('s') => {
+                // Select a file to compress
+                if let Some(input_path) = rfd::FileDialog::new().pick_file() {
+                    // Pre-fill the save dialog with the suggested output filename
+                    let suggested_name = {
+                        let mut n = input_path.file_name().unwrap_or_default().to_os_string();
+                        n.push(".zst");
+                        n
+                    };
+
+                    // Select a location to save compressed file
+                    let output_path = rfd::FileDialog::new()
+                        .set_title("Save compressed file as…")
+                        .set_file_name(suggested_name.to_string_lossy())
+                        .save_file()
+                        .unwrap_or_else(|| Self::default_output_path(&input_path));
+
+                    self.start_compression_job(input_path, output_path);
+                } else {
+                    self.status_message = format!("Not Compressing ",);
+                }
+            }
+
             KeyCode::Char('o') => {
                 // 1. Open the native OS file dialogue
                 if let Some(input_path) = rfd::FileDialog::new().pick_file() {
@@ -179,23 +231,7 @@ impl App {
                     output_path.set_extension(new_extension);
 
                     // 3. Set up the communication channel for the background thread
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    self.receiver = Some(rx);
-                    self.is_compressing = true;
-                    self.progress = 0.0;
-                    self.compression_finished_at = None;
-
-                    // Let the user know we're starting
-                    self.status_message = format!(
-                        " Compressing {:?}",
-                        input_path.file_name().unwrap_or_default()
-                    );
-
-                    crate::start_compression(
-                        input_path.to_string_lossy().to_string(),
-                        output_path.to_string_lossy().to_string(),
-                        tx,
-                    );
+                    self.start_compression_job(input_path, output_path);
                 } else {
                     // TODO handle error gracefully
                     self.status_message = format!(
@@ -233,6 +269,8 @@ impl Widget for &mut App {
             "<o> |".blue().bold(),
             " Decompress ".into(),
             "<d> |".blue().bold(),
+            " Save To ".into(),
+            "<s> |".blue().bold(),
             " Quit ".into(),
             "<Q> ".blue().bold(),
         ]);

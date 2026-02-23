@@ -4,7 +4,6 @@ pub mod ui;
 
 pub use app::*;
 pub use compression::*;
-pub use ui::*;
 
 pub enum CompressMessage {
     Progress {
