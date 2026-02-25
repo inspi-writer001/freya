@@ -175,14 +175,31 @@ impl App {
             }
             KeyCode::Char('o') => {
                 // 1. Open the native OS file dialogue
-                if let Some(input_path) = rfd::FileDialog::new().pick_file() {
-                    // 2. The user picked a file, so read it
-                    // 2. Automatically create the output path (e.g., "document.pdf" -> "document.pdf.zst")
-                    let mut output_path = input_path.clone();
+                if let Some(input_path) = rfd::FileDialog::new()
+                    .set_title("Select file to compress")
+                    .pick_file()
+                {
+                    // 2. Compute the default output path (e.g., "document.pdf" -> "document.pdf.zst")
+                    let mut default_output = input_path.clone();
                     let mut new_extension =
-                        output_path.extension().unwrap_or_default().to_os_string();
+                        default_output.extension().unwrap_or_default().to_os_string();
                     new_extension.push(".zst");
-                    output_path.set_extension(new_extension);
+                    default_output.set_extension(new_extension);
+
+                    // 3. Show a "Save As" dialog so the user can choose where to save
+                    let default_name = default_output
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let mut save_dialog = rfd::FileDialog::new()
+                        .set_title("Save compressed file as")
+                        .set_file_name(&default_name)
+                        .add_filter("Zstandard", &["zst"]);
+                    if let Some(parent) = input_path.parent() {
+                        save_dialog = save_dialog.set_directory(parent);
+                    }
+                    let output_path = save_dialog.save_file().unwrap_or(default_output);
 
                     // 3. Set up the communication channel for the background thread
                     let (tx, rx) = std::sync::mpsc::channel();
